@@ -19,9 +19,6 @@
 
 static bool GlobalRunning = false;
 
-#include "math.h"
-#include "transform.h"
-
 struct read_file_result
 {
     void *Contents;
@@ -37,26 +34,24 @@ struct texture
 
 static texture GlobalTexture;
 
+#include "math.h"
+
 struct vertex
 {
     v4 Pos;
     v4 TexCoords;
+    v4 Normal;
 };
 
-vertex
-Lerp(vertex V1, vertex V2, real32 LerpFactor)
-{
-    vertex Result = {};
-    Result.Pos = Lerp(V1.Pos, V2.Pos, LerpFactor);
-    Result.TexCoords = Lerp(V1.TexCoords, V2.TexCoords, LerpFactor);
-    return Result;
-}
+#include "transform.h"
 
 struct mesh
 {
     vertex *Vertices;
     uint32 VertexAmount;
 };
+
+#include "OBJ.cpp"
 
 struct edge
 {
@@ -76,6 +71,9 @@ struct edge
 
     real32 Depth;
     real32 DepthStep;
+
+    real32 LightAmount;
+    real32 LightAmountStep;
 };
 
 struct gradients
@@ -84,6 +82,7 @@ struct gradients
     real32 YTexCoords[3];
     real32 OneOverZ[3];
     real32 Depth[3];
+    real32 LightAmount[3];
 
     real32 XTexCoordsXStep;
     real32 XTexCoordsYStep;
@@ -96,6 +95,9 @@ struct gradients
 
     real32 DepthXStep;
     real32 DepthYStep;
+
+    real32 LightAmountXStep;
+    real32 LightAmountYStep;
 };
 
 struct back_buffer
@@ -145,6 +147,16 @@ ClearVertexArray(vertex *Array, int32 *ArraySize)
         Array[I] = {};
     }
     *ArraySize = 0;
+}
+
+vertex
+Lerp(vertex V1, vertex V2, real32 LerpFactor)
+{
+    vertex Result = {};
+    Result.Pos = Lerp(V1.Pos, V2.Pos, LerpFactor);
+    Result.TexCoords = Lerp(V1.TexCoords, V2.TexCoords, LerpFactor);
+    Result.Normal = Lerp(V1.Normal, V2.Normal, LerpFactor);
+    return Result;
 }
 
 void
@@ -205,266 +217,6 @@ ClipVertexAxis(vertex *Vertices, int32 *VertAmount, vertex *AuxVertices,
 }
 
 
-read_file_result 
-ReadOBJFile(char *FileName)
-{
-    read_file_result Result = {};
-    HANDLE FileHandle = CreateFileA(FileName, GENERIC_READ, 0, 0, 
-                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if(FileHandle != INVALID_HANDLE_VALUE)
-    {
-        LARGE_INTEGER FileSize64;
-        if(GetFileSizeEx(FileHandle, &FileSize64))
-        {
-            uint32 FileSize = FileSize64.LowPart;
-            void *Buffer = VirtualAlloc(0, FileSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            DWORD BytesRead;
-            if(ReadFile(FileHandle, Buffer, FileSize, &BytesRead, 0) && FileSize == BytesRead)
-            {
-                Result.Contents = Buffer;
-                Result.ContentsSize = FileSize;
-            }
-
-        }
-        
-        CloseHandle(FileHandle);
-    }
-    return Result;
-}
-
-int32
-CountLines(uint8 *Char, uint32 FileSize)
-{
-    int32 Result = 0;
-    for(uint32 I = 0;
-        I < FileSize;
-        I++)
-    {
-        if(*Char == '\n')
-        {
-            Result++;
-        }
-        Char++;
-    }
-    return Result;
-}
-
-void
-NextLine(uint8 **Char)
-{
-    while((**Char) != '\n')
-    {
-        (*Char)++;
-    }
-    (*Char)++;
-}
-
-void
-NextWord(uint8 **Char)
-{
-    while(((**Char) != ' ') && ((**Char) != '\n'))
-    {
-        (*Char)++;
-    }
-    (*Char)++;
-}
-
-void
-ClearToZero(void *Buffer, int32 Size)
-{
-    uint8 *Pointer = (uint8 *)Buffer;
-    for(int32 I = 0;
-        I < Size;
-        I++)
-    {
-        *Pointer++ = 0;
-    }
-}
-
-real32 
-GenerateComponent(uint8 **Char)
-{
-    real32 Result = 0;
-    int32 IntegerPart = 0;
-    real32 DecimalPart = 0;
-    int32 DecimalCount = 0;
-    bool32 IsNegative = false;
-    bool32 GeneratingDecimalPart = false;
-    if(**Char == '-')
-    {
-        IsNegative = true;
-        (*Char)++;
-    }
-    while((**Char != ' ') && (**Char != '\r') && (**Char != '\n'))
-    {
-        if(**Char == '.')
-        {
-            GeneratingDecimalPart = true;
-            (*Char)++;
-        }
-        if(GeneratingDecimalPart)
-        {
-            DecimalCount++;
-            DecimalPart = (**Char - '0') + DecimalPart*10;
-        }
-        else
-        {
-            IntegerPart = (**Char - '0') + IntegerPart*10;
-        }
-        (*Char)++;
-    }
-    Result = (real32)IntegerPart + DecimalPart/(real32)Power(10, DecimalCount);
-    if(IsNegative)
-    {
-        Result = -Result;
-    }
-    return Result;
-}
-
-void
-AddPosition(uint8 *Char, v4 *Position)
-{
-    NextWord(&Char);
-    Position->X = GenerateComponent(&Char);
-    NextWord(&Char);
-    Position->Y = GenerateComponent(&Char);
-    NextWord(&Char);
-    Position->Z = GenerateComponent(&Char);
-    Position->W = 1.0f;
-}
-
-void
-AddTexCoords(uint8 *Char, v4 *TexCoords)
-{
-    NextWord(&Char);
-    TexCoords->X = GenerateComponent(&Char);
-    NextWord(&Char);
-    TexCoords->Y = GenerateComponent(&Char);
-    TexCoords->Z = 0.0f; 
-    TexCoords->W = 0.0f;
-}
-
-void
-AddVertexToMesh(uint8 *Char, vertex *Vertex, v4 *Position, v4 *TexCoords)
-{
-    Char += 2;
-    for(int32 I = 0;
-        I < 3;
-        I++)
-    {
-        int32 PositionIndex = 0;
-        int32 TexCoordsIndex = 0;
-
-        while(*Char != '/')
-        {
-            PositionIndex = (*Char - '0') + PositionIndex*10;
-            Char++;
-        }
-
-        Char++;
-        while(*Char != '/')
-        {
-            TexCoordsIndex = (*Char - '0') + TexCoordsIndex*10;
-            Char++;
-        }
-        Vertex->Pos = Position[PositionIndex - 1];
-        Vertex->TexCoords = TexCoords[TexCoordsIndex - 1];
-        Vertex++;
-        if(I < 2)
-        {
-            NextWord(&Char);
-        }
-    }
-
-}
-
-mesh
-OBJFileToMesh(read_file_result File)
-{
-    mesh Result = {};
-    void *DataBuffer = File.Contents;
-    uint32 FileSize = File.ContentsSize;
-    uint8 *Char = (uint8 *)DataBuffer;
-    int32 TotalLines = CountLines(Char, FileSize);
-    int32 VerticesPosAmount = 0;
-    int32 VerticesNormalAmount = 0;
-    int32 VerticesTexCoordsAmount = 0;
-    int32 TrianglesAmount = 0;
-
-    for(int32 Line = 0;
-        Line < TotalLines;
-        Line++)
-    {
-        if(*Char == 'v' && *(Char + 1) == ' ')
-        {
-            VerticesPosAmount++;
-        }
-        if(*Char == 'v' && *(Char + 1) == 'n')
-        {
-            VerticesNormalAmount++;
-        }
-        if(*Char == 'v' && *(Char + 1) == 't')
-        {
-            VerticesTexCoordsAmount++;
-        }
-        if(*Char == 'f')
-        {
-            TrianglesAmount++;
-        }
-        NextLine(&Char);
-    }
-
-    int32 VectorSize = sizeof(v4);
-    int32 VertexSize = sizeof(vertex);
-    int32 VertexPerFace = 3;
-    void *VerticesPosition = malloc(VerticesPosAmount*VectorSize);
-    void *VerticesTexCoords = malloc(VerticesTexCoordsAmount*VectorSize);
-    //void *VerticesNormals = malloc(VerticesNormalAmount*VectorSize);
-    void *Vertices = malloc(TrianglesAmount*VertexSize*VertexPerFace);
-    ClearToZero(VerticesPosition, VerticesPosAmount*VectorSize);
-    ClearToZero(VerticesTexCoords, VerticesTexCoordsAmount*VectorSize);
-    ClearToZero(Vertices, TrianglesAmount*VertexSize*VertexPerFace);
-    
-    Result.VertexAmount = TrianglesAmount*VertexPerFace;
-    v4 *PositionAux = (v4 *)VerticesPosition;
-    v4 *TexCoordsAux = (v4 *)VerticesTexCoords;
-    vertex *Vertex = (vertex *)Vertices;
-    v4 *Position = (v4 *)VerticesPosition;
-    v4 *TexCoords = (v4 *)VerticesTexCoords;
-    
-
-    Char = (uint8 *)DataBuffer;
-    for(int32 Line = 0;
-        Line < TotalLines;
-        Line++)
-    {
-        if(*Char == 'v' && *(Char + 1) == ' ')
-        {
-            AddPosition(Char, PositionAux); 
-            PositionAux++;
-        }
-        else if(*Char == 'v' && *(Char + 1) == 'n')
-        {
-            //AddNormal(Char, Position); 
-        }
-        else if(*Char == 'v' && *(Char + 1) == 't')
-        {
-            AddTexCoords(Char, TexCoordsAux); 
-            TexCoordsAux++;
-        }
-        else if(*Char == 'f')
-        {
-            AddVertexToMesh(Char, Vertex, Position, TexCoords);
-            Vertex += 3;
-        }
-        NextLine(&Char);
-    }
-    free(VerticesPosition);
-    free(VerticesTexCoords);
-    Result.Vertices = (vertex *)Vertices;
-    return Result;
-
-}
 
 
 real32 
@@ -497,33 +249,39 @@ CreateGradients(vertex Ver0, vertex Ver1, vertex Ver2)
     Result.YTexCoords[1] = Ver1.TexCoords.Y*Result.OneOverZ[1];
     Result.YTexCoords[2] = Ver2.TexCoords.Y*Result.OneOverZ[2];
 
+    v4 LightDirection = {0.0f, 0.0f, -1.0f, 0.0f};
+    Result.LightAmount[0] = Saturate(DotProduct(Ver0.Normal, LightDirection))*0.9f + 0.1f;
+    Result.LightAmount[1] = Saturate(DotProduct(Ver1.Normal, LightDirection))*0.9f + 0.1f;
+    Result.LightAmount[2] = Saturate(DotProduct(Ver2.Normal, LightDirection))*0.9f + 0.1f;
+
     real32 OneOverDx = 1.0f/((Ver1.Pos.X - Ver2.Pos.X)*(Ver0.Pos.Y - Ver2.Pos.Y) - 
                         (Ver0.Pos.X - Ver2.Pos.X)*(Ver1.Pos.Y - Ver2.Pos.Y));
     real32 OneOverDy = -OneOverDx;
 
     real32 DXTexCoordX = DInterpolant(Result.XTexCoords, Ver0.Pos.Y, Ver1.Pos.Y, Ver2.Pos.Y);
-    Result.XTexCoordsXStep = DXTexCoordX*OneOverDx;
-
     real32 DXTexCoordY = DInterpolant(Result.XTexCoords, Ver0.Pos.X, Ver1.Pos.X, Ver2.Pos.X);
+    Result.XTexCoordsXStep = DXTexCoordX*OneOverDx;
     Result.XTexCoordsYStep = DXTexCoordY*OneOverDy;
 
     real32 DYTexCoordX = DInterpolant(Result.YTexCoords, Ver0.Pos.Y, Ver1.Pos.Y, Ver2.Pos.Y);
     real32 DYTexCoordY = DInterpolant(Result.YTexCoords, Ver0.Pos.X, Ver1.Pos.X, Ver2.Pos.X);
-
     Result.YTexCoordsXStep = DYTexCoordX*OneOverDx;
     Result.YTexCoordsYStep = DYTexCoordY*OneOverDy;
 
     real32 DOneOverZX = DInterpolant(Result.OneOverZ, Ver0.Pos.Y, Ver1.Pos.Y, Ver2.Pos.Y);
     real32 DOneOverZY = DInterpolant(Result.OneOverZ, Ver0.Pos.X, Ver1.Pos.X, Ver2.Pos.X);
-
     Result.OneOverZXStep = DOneOverZX*OneOverDx;
     Result.OneOverZYStep = DOneOverZY*OneOverDy;
 
     real32 DDepthX = DInterpolant(Result.Depth, Ver0.Pos.Y, Ver1.Pos.Y, Ver2.Pos.Y);
     real32 DDepthY = DInterpolant(Result.Depth, Ver0.Pos.X, Ver1.Pos.X, Ver2.Pos.X);
-
     Result.DepthXStep = DDepthX*OneOverDx;
     Result.DepthYStep = DDepthY*OneOverDy;
+
+    real32 DLightAmountX = DInterpolant(Result.LightAmount, Ver0.Pos.Y, Ver1.Pos.Y, Ver2.Pos.Y);
+    real32 DLightAmountY = DInterpolant(Result.LightAmount, Ver0.Pos.X, Ver1.Pos.X, Ver2.Pos.X);
+    Result.LightAmountXStep = DLightAmountX*OneOverDx;
+    Result.LightAmountYStep = DLightAmountY*OneOverDy;
     
     return Result;
 }
@@ -547,10 +305,10 @@ BuildEdge(v4 PosInit, v4 PosFin, gradients Gradients, int32 MinYIndex)
 
     Result.XTexCoord = Gradients.XTexCoords[MinYIndex] + Gradients.XTexCoordsXStep*XPrestep + 
                         Gradients.XTexCoordsYStep*YPrestep;
+    Result.XTexCoordStep = Gradients.XTexCoordsYStep + Gradients.XTexCoordsXStep*Result.XStep;
+
     Result.YTexCoord = Gradients.YTexCoords[MinYIndex] + Gradients.YTexCoordsXStep*XPrestep + 
                         Gradients.YTexCoordsYStep*YPrestep;
-
-    Result.XTexCoordStep = Gradients.XTexCoordsYStep + Gradients.XTexCoordsXStep*Result.XStep;
     Result.YTexCoordStep = Gradients.YTexCoordsYStep + Gradients.YTexCoordsXStep*Result.XStep;
 
     Result.OneOverZ = Gradients.OneOverZ[MinYIndex] + Gradients.OneOverZXStep*XPrestep +
@@ -560,15 +318,23 @@ BuildEdge(v4 PosInit, v4 PosFin, gradients Gradients, int32 MinYIndex)
     Result.Depth = Gradients.Depth[MinYIndex] + Gradients.DepthXStep*XPrestep +
                         Gradients.DepthYStep*YPrestep;
     Result.DepthStep = Gradients.DepthYStep + Gradients.DepthXStep*Result.XStep;
+
+    Result.LightAmount = Gradients.LightAmount[MinYIndex] + Gradients.LightAmountXStep*XPrestep +
+                        Gradients.LightAmountYStep*YPrestep;
+    Result.LightAmountStep = Gradients.LightAmountYStep + Gradients.LightAmountXStep*Result.XStep;
     
     return Result;
 }
 
 void 
-CopyPixel(uint32 Source, int32 X, int32 Y)
+CopyPixel(uint32 Source, int32 X, int32 Y, real32 LightAmount)
 {
+    real32 R = ((Source >> 16) & 0xFF)*LightAmount;
+    real32 G = ((Source >> 8) & 0xFF)*LightAmount;
+    real32 B = ((Source >> 0) & 0xFF)*LightAmount;
     uint32 *Pixel = (uint32 *)GlobalBackBuffer.Memory;
-    Pixel[(int32)Y*GlobalBackBuffer.Width + X] = Source;
+
+    Pixel[(int32)Y*GlobalBackBuffer.Width + X] = (0x00 << 24) | ((uint32)R << 16) | ((uint32)G << 8) | ((uint32)B << 0);
 }
 
 void
@@ -583,11 +349,13 @@ DrawHorizontalLine(gradients Gradients, int32 Y, edge Left, edge Right)
     real32 YTexCoordsXStep = (Right.YTexCoord - Left.YTexCoord)/XDist;
     real32 OneOverZXStep = (Right.OneOverZ - Left.OneOverZ)/XDist;
     real32 DepthXStep = (Right.Depth - Left.Depth)/XDist;
+    real32 LightAmountXStep = (Right.LightAmount - Left.LightAmount)/XDist;
 
     real32 XTexCoord = Left.XTexCoord + Gradients.XTexCoordsXStep*XPrestep;
     real32 YTexCoord = Left.YTexCoord + Gradients.YTexCoordsXStep*XPrestep;
     real32 OneOverZ = Left.OneOverZ + Gradients.OneOverZXStep*XPrestep;
     real32 Depth = Left.Depth + Gradients.DepthXStep*XPrestep;
+    real32 LightAmount = Left.LightAmount + Gradients.LightAmountXStep*XPrestep;
 
     int32 GlobalTextureHeight = GlobalTexture.Height;
 
@@ -602,12 +370,13 @@ DrawHorizontalLine(gradients Gradients, int32 Y, edge Left, edge Right)
             int32 XTexCoordInt = (int32)(((real32)GlobalTexture.Width - 1)*(XTexCoord*Z) + 0.5f);
             int32 YTexCoordInt = (int32)(((real32)GlobalTexture.Height - 1)*(YTexCoord*Z) + 0.5f);
             uint32 Source = GlobalTexture.Bitmap[YTexCoordInt*GlobalTextureHeight + XTexCoordInt];
-            CopyPixel(Source, X, Y);
+            CopyPixel(Source, X, Y, LightAmount);
         }
         XTexCoord += XTexCoordsXStep;
         YTexCoord += YTexCoordsXStep;
         OneOverZ += OneOverZXStep;
         Depth += DepthXStep;
+        LightAmount += LightAmountXStep;
     }
 }
 
@@ -619,7 +388,9 @@ EdgeStep(edge *Edge)
     Edge->YTexCoord += Edge->YTexCoordStep;
     Edge->OneOverZ += Edge->OneOverZStep;
     Edge->Depth += Edge->DepthStep;
+    Edge->LightAmount += Edge->LightAmountStep;
 }
+
 real32 
 TriangleArea(v4 V1, v4 V2)
 {
@@ -627,6 +398,7 @@ TriangleArea(v4 V1, v4 V2)
     Result = (V1.X*V2.Y - V1.Y*V2.X)*0.5f;
     return Result;
 }
+
 void
 FillArea(edge *A, edge *B, gradients Gradients, bool32 Handedness)
 {
@@ -649,7 +421,6 @@ FillArea(edge *A, edge *B, gradients Gradients, bool32 Handedness)
         EdgeStep(Left);
         EdgeStep(Right);
     }
-
 }
 
 void
@@ -736,14 +507,6 @@ ClipPolygon(vertex Ver0, vertex Ver1, vertex Ver2, mat4 SSM)
         BuildTriangle(Ver0, Ver1, Ver2, SSM);
         return;
     }
-    /*
-    if((!Ver0InScreen) &&
-    (!Ver1InScreen) &&
-    (!Ver2InScreen)) 
-    {
-        return;
-    }
-    */
     vertex Vertices[7] = {};
     Vertices[0] = Ver0;
     Vertices[1] = Ver1;
@@ -769,7 +532,7 @@ ClipPolygon(vertex Ver0, vertex Ver1, vertex Ver2, mat4 SSM)
 }
 
 void 
-DrawMesh(mesh Mesh, mat4 Transform, mat4 SSM)
+DrawMesh(mesh Mesh, mat4 Transform, mat4 NormalTransform, mat4 SSM)
 {
     for(int32 I = 0;
         I < Mesh.VertexAmount;
@@ -777,10 +540,13 @@ DrawMesh(mesh Mesh, mat4 Transform, mat4 SSM)
     {
         vertex Vec0T = Mesh.Vertices[I];
         Vec0T.Pos = Transform*Vec0T.Pos;
+        Vec0T.Normal = NormalTransform*Vec0T.Normal;
         vertex Vec1T = Mesh.Vertices[I + 1];
         Vec1T.Pos = Transform*Vec1T.Pos;
+        Vec1T.Normal = NormalTransform*Vec1T.Normal;
         vertex Vec2T = Mesh.Vertices[I + 2];
         Vec2T.Pos = Transform*Vec2T.Pos;
+        Vec2T.Normal = NormalTransform*Vec2T.Normal;
         ClipPolygon(Vec0T, Vec1T, Vec2T, SSM);
     }
 }
@@ -802,18 +568,12 @@ FillBackground(back_buffer *Buffer)
             X < Width;
             X++)
         {
-            if((X % 100) == 0 || (Y % 100) == 0)
-            {
-                *Pixel++ = 0x00FFFFFF;
-            }
-            else
-            {
-                uint8 R = 0x1F;
-                uint8 G = 0x1F;
-                uint8 B = 0x1F;
-                *Pixel++ = (0x00 << 24) | (R << 16) | (G << 8) | (B << 0);
-            }
+            uint8 R = 0x1F;
+            uint8 G = 0x1F;
+            uint8 B = 0x1F;
+            *Pixel++ = (0x00 << 24) | (R << 16) | (G << 8) | (B << 0);
         }
+
         Row += Pitch;
     }
 }
@@ -883,7 +643,9 @@ void
 ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack, 
                 bool32 *MoveLeft, bool32 *MoveRight,
                 bool32 *PointRight, bool32 *PointLeft,
-                bool32 *PointUp, bool32 *PointDown)
+                bool32 *PointUp, bool32 *PointDown,
+                bool32 *RenderMonkey, bool32 *RenderSphere,
+                bool32 *Speed, bool32 *Rotate, bool32 *Move)
 {
     switch(Message->message)
     {
@@ -894,6 +656,7 @@ ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack,
         {
             uint32 VKCode = Message->wParam;
             bool32 IsDown = (Message->lParam >> 31 == 0);
+            bool32 IsUp = (Message->lParam >> 31 == 1);
             if(VKCode == 0x57) //W KEY
             {
                 if(IsDown)
@@ -938,7 +701,7 @@ ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack,
                     *MoveRight = false;
                 }
             }
-            if(VKCode == VK_UP) //D KEY
+            if(VKCode == VK_UP) 
             {
                 if(IsDown)
                 {
@@ -949,7 +712,7 @@ ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack,
                     *PointUp = false;
                 }
             }
-            if(VKCode == VK_DOWN) //D KEY
+            if(VKCode == VK_DOWN)
             {
                 if(IsDown)
                 {
@@ -960,7 +723,7 @@ ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack,
                     *PointDown = false;
                 }
             }
-            if(VKCode == VK_RIGHT) //D KEY
+            if(VKCode == VK_RIGHT)
             {
                 if(IsDown)
                 {
@@ -971,7 +734,7 @@ ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack,
                     *PointRight = false;
                 }
             }
-            if(VKCode == VK_LEFT) //D KEY
+            if(VKCode == VK_LEFT)
             {
                 if(IsDown)
                 {
@@ -980,6 +743,63 @@ ProcessMessages(MSG *Message, bool32 *MoveFoward, bool32 *MoveBack,
                 else
                 {
                     *PointLeft = false;
+                }
+            }
+            if(VKCode == 0x31) //1 KEY
+            {
+                *RenderMonkey = true;
+                *RenderSphere = false;
+            }
+            if(VKCode == 0x32) //2 KEY
+            {
+                *RenderMonkey = false;
+                *RenderSphere = true;
+            }
+            if(VKCode == 0x33) //3 KEY
+            {
+                *RenderMonkey = false;
+                *RenderSphere = false;
+            }
+            if(VKCode == VK_SPACE) 
+            {
+                if(IsUp)
+                {
+                    if(*Speed)
+                    {
+                        *Speed = false;
+                    }
+                    else
+                    {
+                        *Speed = true;
+                    }
+                }
+            }
+            if(VKCode == 0x52) // R KEY 
+            {
+                if(IsUp)
+                {
+                    if(*Rotate)
+                    {
+                        *Rotate = false;
+                    }
+                    else
+                    {
+                        *Rotate = true;
+                    }
+                }
+            }
+            if(VKCode == 0x4D) // M KEY 
+            {
+                if(IsUp)
+                {
+                    if(*Move)
+                    {
+                        *Move = false;
+                    }
+                    else
+                    {
+                        *Move = true;
+                    }
                 }
             }
         }break;
@@ -1018,8 +838,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
         if(Window)
         {
-            read_file_result OBJFile = ReadOBJFile("../code/cube.obj");
-            mesh Mesh = OBJFileToMesh(OBJFile);
+            read_file_result CubeFile = ReadOBJFile("cube.obj");
+            mesh CubeMesh = OBJFileToMesh(CubeFile);
+
+            read_file_result MonkeyFile = ReadOBJFile("monkey.obj");
+            mesh MonkeyMesh = OBJFileToMesh(MonkeyFile);
+
+            read_file_result SphereFile = ReadOBJFile("icosphere.obj");
+            mesh SphereMesh = OBJFileToMesh(SphereFile);
 
             GlobalRunning = true;
             
@@ -1066,33 +892,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
             GlobalTexture.Bitmap = (uint32 *)Texels;
             GlobalTexture.Width = 32;
             GlobalTexture.Height = 32;
-            vertex Vec0 = {};
-            vertex Vec1 = {};
-            vertex Vec2 = {};
-            Vec0 = {{-1.0f, -1.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}};
-            Vec1 = {{0.0f, 1.0f, 0.0f, 1.0f}, {0.5f, 1.0f, 0.0f, 0.0f}};
-            Vec2 = {{1.0f, -1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 0.0f}};
-
-            vertex Vertices[3] = {Vec0, Vec1, Vec2};
-            mesh MeshT = {};
-            MeshT.Vertices = Vertices;
-            MeshT.VertexAmount = 3;
-
-            vertex Vec02 = {{-0.5f, -0.33f, -1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}};
-            vertex Vec12 = {{0.0f, 0.33f, -1.0f, 1.0f}, {0.5f, 1.0f, 0.0f, 0.0f}};
-            vertex Vec22 = {{0.5f, -0.33f, -1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 0.0f}};
-
-            vertex Vertices2[3] = {Vec02, Vec12, Vec22};
-            mesh MeshT2 = {};
-            MeshT2.Vertices = Vertices2;
-            MeshT2.VertexAmount = 3;
 
             real32 Angle = 0.0f;
+            real32 Distance = 0.0f;
 
-            LARGE_INTEGER lpPerformanceCount;
-            QueryPerformanceCounter(&lpPerformanceCount);       
-            uint64 LastCount = lpPerformanceCount.QuadPart;
-            v4 CameraPos = {0.0f, 0.0f, 3.0f, 0.0f};
+            v4 CameraPos = {0.0f, 0.0f, 5.0f, 0.0f};
             v4 CameraFront = {0.0f, 0.0f, 0.0f, 0.0f};
             v4 CameraUp = {0.0f, 1.0f, 0.0f, 0.0f};
 
@@ -1105,9 +909,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
             bool32 PointLeft = false;
             bool32 PointUp = false;
             bool32 PointDown = false;
+            bool32 RenderMonkey = false;
+            bool32 RenderSphere = false;
+            bool32 Speed = false;
+            bool32 Rotate = false;
+            bool32 Move = false;
             real32 Yaw = -1.570796327f;
             real32 Pitch = 0.0f;
             real32 CameraSpeed = 0.0f;
+
+            LARGE_INTEGER lpPerformanceCount;
+            QueryPerformanceCounter(&lpPerformanceCount);       
+            uint64 LastCount = lpPerformanceCount.QuadPart;
 
             while(GlobalRunning)
             {
@@ -1116,7 +929,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 {
                     ProcessMessages(&Message, &MoveFoward, &MoveBack, &MoveLeft, 
                                     &MoveRight, &PointRight, &PointLeft, 
-                                    &PointUp, &PointDown);
+                                    &PointUp, &PointDown,
+                                    &RenderMonkey, &RenderSphere, 
+                                    &Speed, &Rotate, &Move);
                 }
                 if(MoveFoward)
                 {
@@ -1150,6 +965,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 {
                     Pitch -= CameraSpeed*0.1f;
                 }
+
                 CameraFront.X = cosf(Yaw)*cosf(Pitch);
                 CameraFront.Y = sinf(Pitch);
                 CameraFront.Z = sinf(Yaw)*cosf(Pitch);
@@ -1160,17 +976,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 FillBackground(&GlobalBackBuffer);
                 ClearZBuffer();
                 View = CreateLookAt(CameraPos, CameraPos + CameraFront, CameraUp);
-
+                
                 for(int32 I = 0;
                     I < 3;
                     I++)
                 {
-                    mat4 Translation = InitTranslation(-3.0f + (real32)I*3.0f, (real32)I, -5.0f);
-                    mat4 Rotation = InitRotation(0.0f, 0.0f, 0.0f);
+                    mat4 Translation = InitTranslation(-3.0f + (real32)I*3.0f, (real32)I, -5.0f + 3.0f*cosf(Distance));
+                    mat4 Rotation = InitRotation(0.0f, Angle, 0.0f);
                     mat4 Model = Translation*Rotation;
                     mat4 Transform = Projection*View*Model;
+                    mat4 NormalTransform = Projection*Model;
+                    if(RenderMonkey)
+                    {
+                        DrawMesh(MonkeyMesh, Transform, NormalTransform, SSM);
+                    }
+                    else if(RenderSphere)
+                    {
 
-                    DrawMesh(Mesh, Transform, SSM);
+                        DrawMesh(SphereMesh, Transform, NormalTransform, SSM);
+                    }
+                    else
+                    {
+                        DrawMesh(CubeMesh, Transform, NormalTransform, SSM);
+                    }
                 }
 
                 HDC DeviceContext = GetDC(Window);
@@ -1182,11 +1010,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 QueryPerformanceCounter(&PerformanceCount);       
                 uint64 EndCount = PerformanceCount.QuadPart;
                 real32 msPerFrame = (EndCount - LastCount)*1000 / (real32)Frequency;
-                char buffer[256] = {};
                 LastCount = EndCount;
-                 _snprintf_s(buffer,sizeof(buffer), "%.02fms/f\n", msPerFrame);
-                OutputDebugString(buffer);
-                Angle += (msPerFrame/2000.0f);
+
+                if(Rotate)
+                {
+                    Angle += (msPerFrame/2000.0f);
+                }
+                if(Move)
+                {
+                    Distance += (msPerFrame/2000.0f); 
+                }
                 if(Angle > 3.1415f*2.0f)
                 {
                     Angle = 0.0f;
@@ -1203,7 +1036,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 {
                     Yaw = -1.570796327f;
                 }
-                CameraSpeed = (msPerFrame/1000.0f)*10.0f;
+                if(Speed)
+                {
+                    CameraSpeed = (msPerFrame/1000.0f)*10.0f;
+                }
+                else
+                {
+                    CameraSpeed = (msPerFrame/1000.0f)*3.0f;
+                }
             }
         }
     } 

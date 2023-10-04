@@ -160,3 +160,33 @@ Normalize(v4 Vec)
     }
     return Result;
 }
+
+real32 
+DotProduct(v4 V1, v4 V2)
+{
+    real32 Result = 0.0f;
+    for(int32 I = 0;
+        I < 3;
+        I++)
+    {
+        Result += V1.E[I]*V2.E[I];
+    }
+    return Result;
+}
+
+real32
+Saturate(real32 Value)
+{
+    real32 Result = Value;
+    if(Value < 0.0f)
+    {
+        Result = 0.0f;  
+    }
+    if(Value > 1.0f)
+    {
+        Result = 1.0f;
+    }
+    return Result;
+}
+
+
