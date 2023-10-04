@@ -1106,7 +1106,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
             bool32 PointLeft = false;
             bool32 PointUp = false;
             bool32 PointDown = false;
-            real32 Yaw = 0.0f;
+            real32 Yaw = -1.570796327f;
             real32 Pitch = 0.0f;
             real32 CameraSpeed = 0.0f;
 
@@ -1166,7 +1166,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                     I < 3;
                     I++)
                 {
-                    mat4 Translation = InitTranslation(-3.0f + (real32)I*3.0f, (real32)I, -3.0f);
+                    mat4 Translation = InitTranslation(-3.0f + (real32)I*3.0f, (real32)I, -5.0f);
                     mat4 Rotation = InitRotation(0.0f, 0.0f, 0.0f);
                     mat4 Model = Translation*Rotation;
                     mat4 Transform = Projection*View*Model;
