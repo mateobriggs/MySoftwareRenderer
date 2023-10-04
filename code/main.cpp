@@ -295,7 +295,7 @@ GenerateComponent(uint8 **Char)
         IsNegative = true;
         (*Char)++;
     }
-    while(**Char != ' ')
+    while((**Char != ' ') && (**Char != '\r') && (**Char != '\n'))
     {
         if(**Char == '.')
         {
@@ -340,7 +340,6 @@ AddTexCoords(uint8 *Char, v4 *TexCoords)
     TexCoords->X = GenerateComponent(&Char);
     NextWord(&Char);
     TexCoords->Y = GenerateComponent(&Char);
-    NextWord(&Char);
     TexCoords->Z = 0.0f; 
     TexCoords->W = 0.0f;
 }
